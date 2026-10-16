@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Break-even analysis for offers: see the contribution profit and margin of any offer before you run it.">
+  <title>Offer Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cabin+Condensed:wght@700&family=PT+Sans:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main>
+    <div class="top">
+      <section class="section" aria-labelledby="simTitle">
+        <div class="section-head">
+          <h2 class="section-title" id="simTitle">Simulator</h2>
+          <div class="head-tools">
+            <button class="text-link" id="openPaste" type="button">Paste From AI</button>
+            <button class="text-link" id="copyLink" type="button">Copy Link</button>
+          <div class="axis-toggle" role="group" aria-label="Along the bottom of the chart">
+            <button type="button" data-axis="cvr">Conversion rate</button>
+            <button type="button" data-axis="roas">ROAS</button>
+          </div>
+          </div>
+        </div>
+        <div class="chart-box" id="chartBox">
+          <svg id="chart" role="img" aria-label="Monthly contribution profit for each offer"></svg>
+          <div class="chart-tip" id="chartTip" hidden></div>
+        </div>
+      </section>
+
+      <aside class="side section" aria-labelledby="storeTitle">
+        <h2 class="section-title" id="storeTitle">Store Variables</h2>
+        <div class="levers">
+          <label class="lever"><span class="lever-val"><span class="unit cur">$</span><input type="number" id="spendNum" min="0" step="100" aria-label="Monthly ad spend"></span><span class="lever-name">Monthly ad spend</span><input type="range" id="spendRange" aria-label="Monthly ad spend"></label>
+          <label class="lever"><span class="lever-val"><input type="number" id="cvrNum" min="0" step="0.05" aria-label="Conversion rate, percent"><span class="unit">%</span></span><span class="lever-name">Conversion rate</span><input type="range" id="cvrRange" aria-label="Conversion rate"></label>
+          <label class="lever"><span class="lever-val"><span class="unit cur">$</span><input type="number" id="cpcNum" min="0" step="0.01" aria-label="Cost per click"></span><span class="lever-name">Cost per click</span><input type="range" id="cpcRange" aria-label="Cost per click"></label>
+        </div>
+        <div class="store-fields" id="storeFields"></div>
+      </aside>
+    </div>
+
+    <section class="section" aria-labelledby="offerTitle">
+      <div class="section-head">
+        <h2 class="section-title" id="offerTitle">Offer Details</h2>
+        <button class="text-link" id="openOffersPaste" type="button">Paste From AI</button>
+      </div>
+      <div class="table-scroll"><table class="offer-table" id="offerTable"></table></div>
+    </section>
+
+    <p class="brand"><span>Offer Simulator</span><span aria-hidden="true">|</span><a href="https://conversionalchemy.com" target="_blank" rel="noopener">ConversionAlchemy.com</a></p>
+  </main>
+
+  <dialog id="offerDialog" aria-label="Offer">
+    <div class="offer-form">
+      <label class="field wide"><span>Offer name</span><input id="bName" type="text" maxlength="60"></label>
+      <label class="field wide"><span>Start from a preset</span><select id="bType"></select></label>
+      <div class="offer-fields" id="bFields"></div>
+      <textarea id="bCode" rows="8" spellcheck="false" aria-label="Offer code"></textarea>
+      <p class="paste-error" id="bError" hidden></p>
+      <div class="dialog-actions">
+        <button class="secondary-button" id="bCopy" type="button">Copy Instructions For AI</button>
+        <button class="text-link danger" id="bDelete" type="button" hidden>Remove Offer</button>
+        <span class="dialog-spacer"></span>
+        <button class="secondary-button" id="bCancel" type="button">Cancel</button>
+        <button class="primary-button" id="bSave" type="button">Add Offer</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="pasteDialog" aria-label="Paste your simulation from AI">
+    <textarea id="pasteInput" rows="14" aria-label="Simulation" spellcheck="false"></textarea>
+    <p class="paste-error" id="pasteError" hidden></p>
+    <div class="dialog-actions">
+      <button class="secondary-button" id="copyPrompt" type="button">Copy Instructions For AI</button>
+      <button class="text-link" id="loadExample" type="button">Load Example Data</button>
+      <button class="text-link" id="resetAll" type="button">Clear All Data</button>
+      <span class="dialog-spacer"></span>
+      <button class="secondary-button" id="closePaste" type="button">Cancel</button>
+      <button class="primary-button" id="applyPaste" type="button">Fill In</button>
+    </div>
+  </dialog>
+
+  <dialog id="offersDialog" aria-label="Paste offers from AI">
+    <textarea id="offersInput" rows="14" aria-label="Offers" spellcheck="false"></textarea>
+    <p class="paste-error" id="offersError" hidden></p>
+    <div class="dialog-actions">
+      <button class="secondary-button" id="copyOffersPrompt" type="button">Copy Instructions For AI</button>
+      <span class="dialog-spacer"></span>
+      <button class="secondary-button" id="closeOffers" type="button">Cancel</button>
+      <button class="primary-button" id="applyOffers" type="button">Fill In</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
