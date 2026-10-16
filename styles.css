@@ -179,6 +179,7 @@ dialog textarea:focus { outline: 2px solid var(--black); outline-offset: 2px; }
 #pasteDialog textarea, #offersDialog textarea { min-height: 280px; margin-bottom: 16px; }
 .offer-form { display: grid; gap: 14px; }
 .offer-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.field-note { grid-column: 1 / -1; color: var(--soft); font-size: 13px; }
 .paste-error { font-weight: 700; color: var(--bad); }
 #pasteDialog .paste-error, #offersDialog .paste-error { margin-bottom: 16px; }
 .dialog-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }

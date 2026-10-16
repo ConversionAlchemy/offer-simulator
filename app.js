@@ -39,7 +39,7 @@ function exampleState() {
     mk("o1", "20% off", COLORS[1], "pct", { pct: 20 }, 18, 20),
     mk("o2", "Buy 2, get 1 free", COLORS[2], "bxgy", { buy: 2, get: 1, ship: 0 }, -15, 10),
     mk("o3", "Price $39.99", COLORS[3], "price", { price: 39.99 }, -6, 20),
-    mk("o4", "Subscribe and save 15%", COLORS[4], "sub", { pct: 15, share: 40, keep: 75, months: 3, other: 10 }, 4, 0)
+    mk("o4", "Subscribe and save 15%", COLORS[4], "sub", { pct: 15, share: 40, churn: 25, subShip: 0, other: 20 }, 4, 0)
   ];
   return s;
 }
@@ -122,6 +122,46 @@ const EXTRA_SHIP = F.money("extraShip", "Fulfilment per extra item", 0);
 const BASE = [F.money("price", "Price per item", 0), F.money("unit", "Your cost per item", 0), F.money("ship", "Shipping charged", 0)];
 const nn = x => Math.max(0, Math.round(x) - 0.01);
 
+// Subscription fields, shared by every subscription template, in your training's terms.
+const SUB = {
+  pct: F.pct("pct", "Subscriber discount", 15),
+  share: F.pct("share", "Take rate: buyers who pick the subscription", 40),
+  churn: F.pct("churn", "Churn: subscribers who cancel each month", 25),
+  gift: F.money("gift", "Welcome gift cost to you", 3),
+  subShip: F.money("subShip", "Shipping charged to subscribers", 0)
+};
+const clampPct = x => Math.min(1, Math.max(0, n(x) / 100));
+// A cohort of new customers at a subscription buy box, followed for 90 days (3 months).
+// Some pick a subscription plan and renew until they cancel; the rest buy once and some reorder, like the control's customers.
+function subscription(st, v, o) {
+  const s = clampPct(v.share), keep = 1 - clampPct(v.churn);
+  const segs = [];
+  o.plans.forEach(p => {
+    if (!(p.w > 0) || !(s > 0)) return;
+    const first = order(st, Object.assign({}, v, { ship: v.subShip }), [item(v, p.qty)], { pct: p.pct, extra: n(o.gift) });
+    const renew = order(st, Object.assign({}, v, { ship: v.subShip }), [item(v, p.qty)], { pct: p.pct });
+    const probs = [];
+    for (let m = p.every; m < 3; m += p.every) probs.push(Math.pow(keep, m));
+    segs.push({ w: s * p.w, first, renew, probs });
+  });
+  if (s < 1) {
+    const otp = order(st, v, [item(v, o.otpQty || 1)]);
+    segs.push({ w: 1 - s, first: otp, renew: otp, probs: [clampPct(v.other === undefined ? 10 : v.other)] });
+  }
+  let pays = 0, cost = 0, total = 0, leaves = 0, rpays = 0, returning = 0;
+  segs.forEach(g => {
+    pays += g.w * g.first.pays;
+    cost += g.w * g.first.cost;
+    const r = g.probs.reduce((a, b) => a + b, 0);
+    total += g.w * r;
+    leaves += g.w * r * leavesOf(g.renew.pays, g.renew.cost, st);
+    rpays += g.w * r * g.renew.pays;
+    returning += g.w * (g.probs[0] || 0);
+  });
+  return { pays, cost, reorder: returning * 100, reorders: returning > 0 ? total / returning : 0,
+    repeatLeaves: total > 0 ? leaves / total : 0, repeatPays: total > 0 ? rpays / total : 0 };
+}
+
 const TYPES = [
   { g: "Price", k: "price", label: "Price only", fields: [],
     name: v => "Price " + money(v.price), build: (st, v) => one(st, v) },
@@ -148,34 +188,31 @@ const TYPES = [
     name: () => "Free shipping", build: (st, v) => order(st, Object.assign({}, v, { ship: 0 }), [item(v)]) },
   { g: "Extras", k: "bonus", label: "Free bonus, guide, course or service", fields: [F.money("extra", "Cost to you per order", 0)],
     name: () => "Free bonus", build: (st, v) => one(st, v, { extra: v.extra }) },
-  { g: "Upsells and subscriptions", k: "bump", label: "Upsell, order bump or post-purchase",
+  { g: "Upsells", k: "bump", label: "Upsell, order bump or post-purchase",
     fields: [F.money("addPrice", "Add-on price", 24.99), F.money("addCost", "Add-on cost", 1.3), F.pct("take", "Customers who add it", 20), EXTRA_SHIP],
     name: () => "Upsell", build: (st, v) => {
       const b = one(st, v);
       const t = n(v.take) / 100;
       return { pays: b.pays + t * n(v.addPrice), cost: b.cost + t * (n(v.addCost) + n(v.extraShip)) };
     } },
-  { g: "Upsells and subscriptions", k: "sub", label: "Subscribe and save",
-    fields: [F.pct("pct", "Subscriber discount", 15), F.pct("share", "Take rate: customers who subscribe", 40),
-      F.pct("keep", "Subscribers still active each month", 75), F.int("months", "Months to count", 3), F.pct("other", "One-time buyers who reorder", 10)],
-    name: v => "Subscribe and save " + n(v.pct) + "%", build: (st, v) => {
-      // A cohort of new customers: some subscribe and renew monthly, a share dropping off each month; the rest buy once and some come back.
-      const clamp = x => Math.min(1, Math.max(0, n(x) / 100));
-      const full = one(st, v);
-      const sub = one(st, v, { pct: v.pct });
-      const s = clamp(v.share), keep = clamp(v.keep), months = Math.max(1, Math.round(n(v.months)));
-      let renewals = 0;
-      for (let k = 1; k < months; k++) renewals += Math.pow(keep, k);
-      const subRepeats = s * renewals, oneRepeats = (1 - s) * clamp(v.other);
-      const total = subRepeats + oneRepeats;
-      const returning = s * (months > 1 ? keep : 0) + oneRepeats;
-      return {
-        pays: s * sub.pays + (1 - s) * full.pays, cost: s * sub.cost + (1 - s) * full.cost,
-        reorder: returning * 100, reorders: returning > 0 ? total / returning : 0,
-        repeatLeaves: total > 0 ? (subRepeats * leavesOf(sub.pays, sub.cost, st) + oneRepeats * leavesOf(full.pays, full.cost, st)) / total : 0,
-        repeatPays: total > 0 ? (subRepeats * sub.pays + oneRepeats * full.pays) / total : 0
-      };
-    } },
+  { g: "Subscriptions", k: "sub", sub: true, labels: { ship: "Shipping charged to one-time buyers" }, label: "Subscribe and save", fields: [SUB.pct, SUB.share, SUB.churn, SUB.subShip],
+    name: v => "Subscribe and save " + n(v.pct) + "%", build: (st, v) => subscription(st, v, { plans: [{ w: 1, qty: 1, every: 1, pct: v.pct }] }) },
+  { g: "Subscriptions", k: "subgift", sub: true, labels: { ship: "Shipping charged to one-time buyers" }, label: "Subscribe with welcome gifts", fields: [SUB.pct, SUB.share, SUB.churn, SUB.gift, SUB.subShip],
+    name: v => "Subscribe " + n(v.pct) + "% + welcome gifts", build: (st, v) => subscription(st, v, { plans: [{ w: 1, qty: 1, every: 1, pct: v.pct }], gift: v.gift }) },
+  { g: "Subscriptions", k: "subsupply", sub: true, labels: { ship: "Shipping charged to one-time buyers" }, label: "Multi-month supply subscription",
+    fields: [F.int("months", "Months of supply per delivery", 3), SUB.pct, SUB.share, SUB.churn, SUB.gift, SUB.subShip, EXTRA_SHIP],
+    note: "Each delivery lasts several months, so its first renewal lands after the 90 days this tool counts. It's judged on the first delivery alone, which undersells it next to monthly plans.",
+    name: v => n(v.months) + "-month supply subscription",
+    build: (st, v) => { const m = Math.max(1, Math.round(n(v.months))); return subscription(st, v, { plans: [{ w: 1, qty: m, every: m, pct: v.pct }], gift: v.gift, otpQty: m }); } },
+  { g: "Subscriptions", k: "subtier", sub: true, labels: { ship: "Shipping charged to one-time buyers", pct: "1-month plan discount" }, label: "Tiered subscription: 1-month or 3-month plan",
+    fields: [SUB.pct, F.pct("pct3", "3-month plan discount", 25), F.pct("big", "Subscribers who pick the 3-month plan", 40), SUB.share, SUB.churn, SUB.gift, SUB.subShip, EXTRA_SHIP],
+    note: "The 3-month plan's first renewal lands after 90 days, so only its first delivery counts here.",
+    name: () => "Subscription, 1 or 3 months",
+    build: (st, v) => { const b = clampPct(v.big); return subscription(st, v, { plans: [{ w: 1 - b, qty: 1, every: 1, pct: v.pct }, { w: b, qty: 3, every: 3, pct: v.pct3 }], gift: v.gift }); } },
+  { g: "Subscriptions", k: "subonly", sub: true, labels: { ship: "Shipping charged to one-time buyers" }, label: "Subscription only, no one-time option", fields: [SUB.pct, SUB.churn, SUB.gift, SUB.subShip],
+    note: "Rarely works on cold traffic: with no one-time price beside it, the subscription has no anchor to show its saving. Only try it once your subscription take rate already beats one-time, and you're happy with churn.",
+    name: () => "Subscription only",
+    build: (st, v) => subscription(st, Object.assign({}, v, { share: 100 }), { plans: [{ w: 1, qty: 1, every: 1, pct: v.pct }], gift: v.gift }) },
   { g: "Risk and payments", k: "guarantee", label: "Guarantee or free returns", fields: [F.pct("more", "Extra refunds you expect", 3)],
     name: () => "Money-back guarantee", build: (st, v) => { const b = one(st, v); return { pays: b.pays, cost: b.cost + b.pays * n(v.more) / 100 }; } },
   { g: "Risk and payments", k: "bnpl", label: "Pay later or split pay", fields: [F.pct("fee", "Provider fee", 6)],
@@ -188,6 +225,8 @@ const TYPE = Object.fromEntries(TYPES.map(t => [t.k, t]));
 
 function applySpec(o) {
   if (!o.spec || !TYPE[o.spec.preset] || o.spec.preset === "custom") return;
+  // older saves described subscriptions by who stays; the training speaks of churn
+  if (o.spec.v.keep !== undefined && o.spec.v.churn === undefined) o.spec.v.churn = 100 - n(o.spec.v.keep);
   TYPE[o.spec.preset].fields.forEach(f => { if (o.spec.v[f.k] === undefined) o.spec.v[f.k] = f.def(o.spec.v); });
   const r = TYPE[o.spec.preset].build(state.store, o.spec.v);
   if (!r) return;
@@ -199,8 +238,10 @@ function applySpec(o) {
 // New offers start from the current offer's item price, cost and shipping.
 function baseItem() {
   const b = state.offers[0];
-  if (b && b.spec && b.spec.preset !== "custom") return { price: n(b.spec.v.price), unit: n(b.spec.v.unit), ship: n(b.spec.v.ship) };
-  return { price: b ? n(b.pays) : 0, unit: b ? n(b.cost) : 0, ship: 0 };
+  // "other": how often one-time buyers reorder, taken from the control; subscription templates use it for their one-time side
+  const other = b ? n(b.reorder) : 0;
+  if (b && b.spec && b.spec.preset !== "custom") return { price: n(b.spec.v.price), unit: n(b.spec.v.unit), ship: n(b.spec.v.ship), other };
+  return { price: b ? n(b.pays) : 0, unit: b ? n(b.cost) : 0, ship: 0, other };
 }
 
 /* ---------- formatting ---------- */
@@ -679,6 +720,7 @@ function renderOfferFields() {
   };
   fields.forEach(f => {
     if (B.type === "freeship" && f.k === "ship") return;
+    if (t.labels && t.labels[f.k]) f = Object.assign({}, f, { label: t.labels[f.k] });
     add(f, B.v[f.k], val => { B.v[f.k] = val; B.touched.add(f.k); writeCode(); });
   });
   if (B.type === "custom") {
@@ -686,7 +728,8 @@ function renderOfferFields() {
     add({ k: "cpays", label: "Customer pays", type: "money" }, c.pays, v => { B.custom = Object.assign({}, B.custom || c, { pays: v }); writeCode(); });
     add({ k: "ccost", label: "Your cost", type: "money" }, c.cost, v => { B.custom = Object.assign({}, B.custom || c, { cost: v }); writeCode(); });
   }
-  if (B.type !== "sub") {
+  if (TYPE[B.type].note) box.append(el("p", "field-note wide", TYPE[B.type].note));
+  if (!TYPE[B.type].sub) {
     add({ k: "reorder", label: "Customers who reorder in 90 days", type: "pct" }, B.reorder, v => { B.reorder = Math.min(100, v); writeCode(); });
     add({ k: "reorders", label: "Reorders each", type: "int" }, B.reorders, v => { B.reorders = v; writeCode(); });
   }
@@ -716,7 +759,7 @@ function writeCode() {
 
 $("#bType").addEventListener("change", () => {
   const prev = result();
-  const keep = { price: B.v.price, unit: B.v.unit, ship: B.v.ship };
+  const keep = { price: B.v.price, unit: B.v.unit, ship: B.v.ship, other: B.v.other };
   B.type = $("#bType").value;
   B.v = Object.assign({}, keep);
   B.touched = new Set(["price", "unit", "ship"]);
@@ -1121,7 +1164,7 @@ The variants are the offer ideas I list at the end, up to ${MAX_OFFERS - 1}. If 
 
 ${typesForAi()}
 
-If a variant uses a different product or price from the control, add "pricePerItem", "costPerItem" and "shippingCharged" to it. "reorderPercent" is the share of customers who order again within 90 days, and "reordersEach" is how many times; leave these out for "sub". Set "conversionChangePercent" only when I say how much an offer should lift or lower conversion, otherwise use 0.
+If a variant uses a different product or price from the control, add "pricePerItem", "costPerItem" and "shippingCharged" to it. "reorderPercent" is the share of customers who order again within 90 days, and "reordersEach" is how many times; leave these out for the subscription types. Set "conversionChangePercent" only when I say how much an offer should lift or lower conversion, otherwise use 0.
 
 Every figure is a plain number with no symbol, commas or spaces. Use 0 for anything you genuinely cannot find, never estimate or invent a store figure, and if a variant needs a number I haven't given you, ask me rather than guessing.
 
@@ -1268,7 +1311,7 @@ function offerAsJson(o) {
     TYPE[t].fields.forEach(f => { out[f.k] = n(v[f.k]); });
     Object.entries(ITEM_KEYS).forEach(([k, key]) => { if (n(v[k]) !== b[k]) out[key] = n(v[k]); });
   }
-  if (t !== "sub") { out.reorderPercent = n(o.reorder); out.reordersEach = n(o.reorders) || 1; }
+  if (!TYPE[t].sub) { out.reorderPercent = n(o.reorder); out.reordersEach = n(o.reorders) || 1; }
   out.conversionChangePercent = Math.round(n(o.conv));
   return out;
 }
@@ -1286,7 +1329,7 @@ Pick the closest type for each one and fill in its keys with plain numbers:
 
 ${typesForAi()}
 
-If a variant uses a different product or price from my control, add "pricePerItem", "costPerItem" and "shippingCharged" to it. "reorderPercent" is the share of customers who order again within 90 days, and "reordersEach" is how many times; leave these out for "sub". Set "conversionChangePercent" only when I say how much an offer should lift or lower conversion, otherwise use 0. If you need a number I haven't given you, ask me rather than guessing. Up to ${MAX_OFFERS - 1} variants.
+If a variant uses a different product or price from my control, add "pricePerItem", "costPerItem" and "shippingCharged" to it. "reorderPercent" is the share of customers who order again within 90 days, and "reordersEach" is how many times; leave these out for the subscription types. Set "conversionChangePercent" only when I say how much an offer should lift or lower conversion, otherwise use 0. If you need a number I haven't given you, ask me rather than guessing. Up to ${MAX_OFFERS - 1} variants.
 
 My variants:`;
 }
