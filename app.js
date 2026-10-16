@@ -79,7 +79,8 @@ function calc(o) {
   const rLeaves = o.repeatLeaves === undefined || o.repeatLeaves === null ? leaves : o.repeatLeaves;
   const rPays = o.repeatPays === undefined || o.repeatPays === null ? n(o.pays) : o.repeatPays;
   const repeats = n(o.reorder) / 100 * Math.max(0, n(o.reorders));
-  return { leaves, value: leaves + repeats * rLeaves, revenue: netOf(o.pays) + repeats * netOf(rPays) };
+  // value: what a new customer leaves over 90 days; extra: the part that comes from reorders
+  return { leaves, value: leaves + repeats * rLeaves, extra: repeats * rLeaves, revenue: netOf(o.pays) + repeats * netOf(rPays) };
 }
 const visitors = () => (n(state.store.cpc) > 0 ? n(state.store.spend) / n(state.store.cpc) : 0);
 const expectedCvr = o => n(state.store.cvr) * (1 + n(o.conv) / 100);
@@ -88,7 +89,10 @@ const profitAt = (v, cvr) => visitors() * cvr / 100 * v - n(state.store.spend);
 // The conversion rate an offer needs just to cover its ad cost.
 const breakEvenCvr = v => (v > 0 && n(state.store.cpc) > 0 ? n(state.store.cpc) / v * 100 : NaN);
 // The ROAS your ad platform has to report (first-order revenue over ad spend) for this offer to break even.
-const breakEvenRoas = o => { const v = calc(o).value; return v > 0 ? n(o.pays) / v : NaN; };
+// Break-even ROAS is judged on the first order, as the training teaches: reorders don't pay back ad spend on the day.
+const breakEvenRoas = o => { const v = calc(o).leaves; return v > 0 ? n(o.pays) / v : NaN; };
+// Where the offer stops losing money once 90-day reorders are counted (the ring on the chart).
+const breakEvenRoas90 = o => { const v = calc(o).value; return v > 0 ? n(o.pays) / v : NaN; };
 const roasAt = (o, cvr) => (n(state.store.cpc) > 0 ? cvr / 100 * n(o.pays) / n(state.store.cpc) : NaN);
 const expectedRoas = o => roasAt(o, expectedCvr(o));
 // How far conversion can fall from what you expect before the offer loses money.
@@ -292,6 +296,18 @@ function renderStoreFields() {
     const lab = el("label", "field");
     lab.append(el("span", "", f.label + (f.money ? " (" + cur() + ")" : f.suffix ? " (" + f.suffix + ")" : "")));
     let inp;
+    if (f.check) {
+      lab.classList.add("check-field");
+      inp = el("input", "show");
+      inp.type = "checkbox";
+      inp.checked = !!state.store[f.k];
+      inp.id = "store-" + f.k;
+      inp.title = "Leave this off unless your own data shows customers really do reorder";
+      inp.addEventListener("change", () => { state.store[f.k] = inp.checked; save(); renderTable(); });
+      lab.append(inp);
+      grid.append(lab);
+      return;
+    }
     if (f.text) { inp = el("input"); inp.type = "text"; inp.maxLength = 3; inp.value = state.store[f.k] || "$"; }
     else inp = numInput(state.store[f.k], { min: "0" });
     inp.id = "store-" + f.k;
@@ -317,10 +333,11 @@ const COLS = [
   ["Your cost", "", "Products, gifts, packing and shipping for one order. Payment fees and refunds are added for you."],
   ["Reorder %", "", "Share of customers who order again within 90 days."],
   ["Conversion rate", "c-conv", "The conversion rate you expect with this offer. The first offer sets the base; the others show their change from it."],
-  ["Break-even ROAS", "", "The ROAS your ad platform has to report for this offer to cover its ad cost. It comes from the price and costs, so change those to move it."],
+  ["Break-even ROAS", "", "The ROAS your ad platform has to report for the first order to cover its ad cost. Subscription and repeat offers can run below it and still make money once reorders come in."],
   ["Expected ROAS", "", "The ROAS your ad platform should report with this offer. Type one in and the conversion rate follows."],
   ["Margin of safety", "", "How far conversion can fall from what you expect before this offer starts losing money."],
-  ["Contribution profit", "", "What the offer leaves a month after ads, at today's ad spend and the conversion rate you expect."],
+  ["Contribution profit", "", "What the offer leaves a month after ads, at today's ad spend and the conversion rate you expect, counting reorders within 90 days."],
+  ["From reorders", "", "How much of that contribution profit comes from reorders within 90 days, rather than the first order."],
   ["Contribution margin", "", "Contribution profit as a share of revenue."],
   ["Leaves per order", "", "What one order leaves after every cost, before ads."],
   ["To tie", "", "How many more orders this offer needs to make the same money as your current offer."],
@@ -434,7 +451,7 @@ function offerRow(o, i) {
   exp.append(expIn);
   tr.append(exp);
   }
-  ["safety", "cp", "cm", "leaves", "tie"].forEach(k => { const td = el("td"); td.id = k + "-" + o.id; tr.append(td); });
+  ["safety", "cp", "reo", "cm", "leaves", "tie"].forEach(k => { const td = el("td"); td.id = k + "-" + o.id; tr.append(td); });
 
   const x = el("td", "c-x");
   if (i > 0) {
@@ -530,7 +547,7 @@ function refresh() {
     if (expFix) { const r = expectedRoas(o); expFix.textContent = Number.isFinite(r) ? r.toFixed(2) : "\u2013"; }
     const expIn = document.getElementById("expin-" + o.id);
     if (expIn) {
-      const r = expectedRoas(o), be = breakEvenRoas(o);
+      const r = expectedRoas(o), be = breakEvenRoas90(o);
       if (document.activeElement !== expIn) expIn.value = Number.isFinite(r) ? r.toFixed(2) : "";
       expIn.classList.toggle("down", Number.isFinite(r) && Number.isFinite(be) && r < be);
     }
@@ -549,6 +566,11 @@ function refresh() {
       td.append(el("span", cp < 0 ? "down" : cp > 0 ? "up" : "", money(cp, 0)));
       if (i > 0 && Math.abs(cp - cp0) >= 1) td.append(el("small", cp > cp0 ? "up" : "down", signed(cp - cp0, x => compact(x))));
     });
+    set("reo", td => {
+      if (!live) { td.append("\u2013"); return; }
+      const r = visitors() * cvr / 100 * c.extra;
+      td.append(r > 0.5 ? el("span", "up", money(r, 0)) : el("span", "muted", "\u2013"));
+    });
     set("cm", td => {
       if (!live) { td.append("–"); return; }
       const rev = visitors() * cvr / 100 * c.revenue;
@@ -564,7 +586,7 @@ function refresh() {
       const m = safetyOf(o);
       if (!Number.isFinite(m)) { td.append(el("span", "down", "None")); return; }
       const s = el("span", m < 0 ? "down" : m >= 0.2 ? "up" : "", Math.round(m * 100) + "%");
-      s.title = m < 0 ? "Already below break-even at the conversion rate you expect" : "Conversion can fall " + Math.round(m * 100) + "% before this offer loses money";
+      s.title = m < 0 ? "Already losing money at the conversion rate you expect, even counting reorders" : "Conversion can fall " + Math.round(m * 100) + "% before this offer loses money, counting reorders";
       td.append(s);
     });
     set("tie", td => {
@@ -783,7 +805,7 @@ const AXES = {
     toCvr: (o, x) => x, of: (o, cvr) => cvr, be: s => s.be, today: () => n(state.store.cvr) },
   roas: { title: "ROAS", fmt: x => (Math.round(x * 10) / 10).toFixed(1), long: x => x.toFixed(2) + " ROAS",
     toCvr: (o, x) => (n(o.pays) > 0 ? x * n(state.store.cpc) / n(o.pays) * 100 : 0), of: (o, cvr) => roasAt(o, cvr),
-    be: s => breakEvenRoas(s.o), today: () => (state.offers[0] ? expectedRoas(state.offers[0]) : NaN) }
+    be: s => breakEvenRoas90(s.o), today: () => (state.offers[0] ? expectedRoas(state.offers[0]) : NaN) }
 };
 const axis = () => AXES[state.axis] || AXES.cvr;
 function syncAxisToggle() {
@@ -1015,14 +1037,16 @@ function showChartTip(e) {
     if (near.kind === "be") {
       tip.append(el("p", "tip-tag", "Break even"));
       tipRow(tip, "Conversion rate", s.be.toFixed(2) + "%");
-      tipRow(tip, "ROAS", fmtRoas(breakEvenRoas(o)));
+      tipRow(tip, "ROAS", fmtRoas(breakEvenRoas90(o)));
+      if (calc(o).extra > 0) tip.append(el("p", "tip-tag", "Counting 90-day reorders. On the first order alone it needs " + fmtRoas(breakEvenRoas(o)) + " ROAS"));
     } else {
       tipRow(tip, "Conversion rate", s.cvr.toFixed(2) + "%");
       tipRow(tip, "ROAS", fmtRoas(expectedRoas(o)));
       tipRow(tip, "Contribution profit", money(s.cp, 0));
       const m = safetyOf(o);
       if (Number.isFinite(m)) tipRow(tip, "Margin of safety", Math.round(m * 100) + "%");
-      tipRow(tip, "Break-even ROAS", Number.isFinite(breakEvenRoas(o)) ? fmtRoas(breakEvenRoas(o)) : "Never");
+      if (calc(o).extra > 0) tipRow(tip, "From reorders", money(visitors() * s.cvr / 100 * calc(o).extra, 0));
+      tipRow(tip, "Break-even ROAS, first order", Number.isFinite(breakEvenRoas(o)) ? fmtRoas(breakEvenRoas(o)) : "Never");
     }
   } else if (line) {
     focusSeries(line);
@@ -1031,7 +1055,7 @@ function showChartTip(e) {
     tipRow(tip, "Conversion rate", cvr.toFixed(2) + "%");
     tipRow(tip, "ROAS", fmtRoas(roasAt(line.o, cvr)));
     tipRow(tip, "Contribution profit", money(line.at(c), 0));
-    tipRow(tip, "Break-even ROAS", Number.isFinite(breakEvenRoas(line.o)) ? fmtRoas(breakEvenRoas(line.o)) : "Never");
+    tipRow(tip, "Break-even ROAS, first order", Number.isFinite(breakEvenRoas(line.o)) ? fmtRoas(breakEvenRoas(line.o)) : "Never");
   } else {
     // 3. anywhere else: the ticked offers where the crosshair sits, best first, as a small table
     focusSeries(null);
