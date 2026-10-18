@@ -1188,7 +1188,9 @@ function simAsCode() {
   }, null, 2);
 }
 function readJson(raw) {
-  const text = String(raw || "").trim().replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
+  // Notes apps and chat windows often turn straight quotes into curly ones, so straighten them first.
+  const text = String(raw || "").replace(/[\u201C\u201D\u201E\u201F\u2033\u00AB\u00BB]/g, '"').replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'").replace(/\u00A0/g, " ")
+    .trim().replace(/^```[a-z]*\n?/i, "").replace(/```$/, "").trim();
   const a = text.indexOf("{"), b = text.lastIndexOf("}");
   if (a === -1 || b <= a) return null;
   try { return JSON.parse(text.slice(a, b + 1)); } catch { return null; }
