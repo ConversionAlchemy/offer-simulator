@@ -353,7 +353,10 @@ function renderStoreFields() {
     else inp = numInput(state.store[f.k], { min: "0" });
     inp.id = "store-" + f.k;
     inp.addEventListener("input", () => {
+      const prev = n(state.store[f.k]);
       state.store[f.k] = f.text ? (inp.value || "$") : n(inp.value);
+      // custom offers keep their product cost; only the fulfilment part moves
+      if (f.k === "shipFirst") state.offers.forEach(o => { if (!o.spec || o.spec.preset === "custom") o.cost = round2(n(o.cost) + n(state.store.shipFirst) - prev); });
       state.offers.forEach(applySpec);
       save();
       syncLevers();
@@ -371,7 +374,7 @@ const COLS = [
   ["Test", "c-test", "The control is the offer you run today. Variants are the offers you're testing against it."],
   ["Offer", "c-name", ""],
   ["Customer pays", "", "What the customer pays for one order, shipping included."],
-  ["Your cost", "", "Products, gifts, packing and shipping for one order. Payment fees and refunds are added for you."],
+  ["Your cost", "", "What the products (and any gifts) in one order cost you. Fulfilment, payment fees and refunds are added for you."],
   ["Reorder %", "", "Share of customers who order again within 90 days."],
   ["Conversion rate", "c-conv", "The conversion rate you expect with this offer. The first offer sets the base; the others show their change from it."],
   ["Break-even ROAS", "", "The ROAS your ad platform has to report for the first order to cover its ad cost. Subscription and repeat offers can run below it and still make money once reorders come in."],
@@ -450,7 +453,9 @@ function offerRow(o, i) {
   };
   const custom = () => { o.spec = { preset: "custom", v: {} }; o.repeatLeaves = null; o.repeatPays = null; };
   tr.append(edit("pays", n(o.pays).toFixed(2), "Customer pays", "any", v => { o.pays = v; custom(); }));
-  tr.append(edit("cost", n(o.cost).toFixed(2), "Your cost", "any", v => { o.cost = v; custom(); }));
+  // The table shows product cost only; the store's fulfilment per order is always added on top.
+  const ful = n(state.store.shipFirst);
+  tr.append(edit("cost", Math.max(0, n(o.cost) - ful).toFixed(2), "Your cost", "any", v => { o.cost = v + n(state.store.shipFirst); custom(); }));
   tr.append(edit("reorder", n(o.reorder), "Reorder rate, percent", "1", v => { o.reorder = Math.min(100, v); }));
 
   const conv = el("td", "c-conv");
@@ -726,7 +731,7 @@ function renderOfferFields() {
   if (B.type === "custom") {
     const c = B.custom || { pays: 0, cost: 0 };
     add({ k: "cpays", label: "Customer pays", type: "money" }, c.pays, v => { B.custom = Object.assign({}, B.custom || c, { pays: v }); writeCode(); });
-    add({ k: "ccost", label: "Your cost", type: "money" }, c.cost, v => { B.custom = Object.assign({}, B.custom || c, { cost: v }); writeCode(); });
+    add({ k: "ccost", label: "Your cost (fulfilment included)", type: "money" }, c.cost, v => { B.custom = Object.assign({}, B.custom || c, { cost: v }); writeCode(); });
   }
   if (TYPE[B.type].note) box.append(el("p", "field-note wide", TYPE[B.type].note));
   if (!TYPE[B.type].sub) {
